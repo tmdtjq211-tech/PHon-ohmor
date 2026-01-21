@@ -3,13 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>대학전쟁3 - 블록 오목 (Auto Match)</title>
+    <title>대학전쟁3 - 블록 오목 (Debug Ver)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #050505; color: #fff; font-family: 'Segoe UI', sans-serif; touch-action: none; }
         
         /* UI 레이아웃 */
         #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; display: flex; flex-direction: column; justify-content: space-between; }
         
+        /* 디버그 로그 창 (새로 추가됨) */
+        #debug-console {
+            position: absolute; bottom: 100px; left: 10px; width: 300px; height: 150px;
+            background: rgba(0,0,0,0.8); border: 1px solid red; color: #0f0;
+            font-size: 10px; overflow-y: scroll; pointer-events: auto; padding: 5px;
+            z-index: 9999; font-family: monospace; display: block;
+        }
+
         /* 상단 정보창 */
         #top-info { 
             pointer-events: auto; background: rgba(0, 0, 0, 0.8); padding: 10px 20px; 
@@ -88,11 +96,13 @@
 
         <div id="lobby">
             <h1 style="color:#4CAF50; margin-bottom:20px;">BLOCK OMOK</h1>
-            <p style="color:#888; font-size:12px; margin-bottom:20px;">엄격한 물리 엔진 버전</p>
+            <p style="color:#888; font-size:12px; margin-bottom:20px;">시스템 로그 버전</p>
             <button onclick="startMode('ai')">🤖 AI 연습 (싱글)</button>
             <hr style="border-color:#333; margin:15px 0;">
             <button onclick="startMode('online')" style="border-color:#2196F3; color:#2196F3; background:transparent;">⚡ 빠른 매칭 (Online)</button>
         </div>
+        
+        <div id="debug-console">시스템 로그 대기중...<br></div>
 
         <div id="bottom-panel" class="hidden">
             <button id="confirm-btn" onclick="confirmMove()">✅ 여기에 착수하기</button>
@@ -130,13 +140,22 @@
         import { getDatabase, ref, set, onValue, update, push, get, query, limitToLast, runTransaction } from "firebase/database";
         import { getAnalytics } from "firebase/analytics";
 
+        // 로깅 함수
+        function log(msg) {
+            const consoleDiv = document.getElementById('debug-console');
+            const time = new Date().toLocaleTimeString();
+            consoleDiv.innerHTML += `[${time}] ${msg}<br>`;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+            console.log(`[SYS] ${msg}`);
+        }
+
         // ==========================================
-        // 🔥 사용자가 제공한 Config (URL 포함됨!)
+        // 🔥 Config (URL 포함 확인됨)
         // ==========================================
         const firebaseConfig = {
             apiKey: "AIzaSyB-wYr-_N-ZaPGJon_mj2OsNgG472b1gw8",
             authDomain: "dddaaa-51437.firebaseapp.com",
-            databaseURL: "https://dddaaa-51437-default-rtdb.firebaseio.com", // ✅ 중요: 이 주소가 있어야 연결됨
+            databaseURL: "https://dddaaa-51437-default-rtdb.firebaseio.com",
             projectId: "dddaaa-51437",
             storageBucket: "dddaaa-51437.firebasestorage.app",
             messagingSenderId: "372926322507",
@@ -145,9 +164,26 @@
         };
 
         // Initialize Firebase
-        const app = initializeApp(firebaseConfig);
-        const analytics = getAnalytics(app); // 애널리틱스 초기화 (사용자 요청)
-        const db = getDatabase(app);
+        let app, db, analytics;
+        try {
+            app = initializeApp(firebaseConfig);
+            analytics = getAnalytics(app);
+            db = getDatabase(app);
+            log("Firebase 초기화 성공");
+            
+            // 연결 테스트
+            const connectedRef = ref(db, ".info/connected");
+            onValue(connectedRef, (snap) => {
+                if (snap.val() === true) {
+                    log("🟢 서버 연결됨!");
+                } else {
+                    log("🔴 서버 연결 끊김 (인터넷 확인)");
+                }
+            });
+
+        } catch (e) {
+            log("❌ Firebase 초기화 실패: " + e.message);
+        }
 
         const state = {
             mode: 'ai', myRole: 'p1', currentTurn: 'p1', phase: 'place',
@@ -172,106 +208,137 @@
                 setupInitialPieces();
                 document.getElementById('top-info').classList.remove('hidden');
                 document.getElementById('bottom-panel').classList.remove('hidden');
+                document.getElementById('debug-console').classList.add('hidden'); // 싱글에선 로그 숨김
             }
         };
 
         // ==========================================
-        // 🔥 실시간 자동 매칭 로직
+        // 🔥 실시간 자동 매칭 로직 (디버그 강화)
         // ==========================================
         async function findAndJoinMatch() {
             document.getElementById('overlay-screen').classList.remove('hidden');
             document.getElementById('overlay-title').innerText = "매칭 중...";
             document.getElementById('loading-spinner').classList.remove('hidden');
-            document.getElementById('match-status').innerText = "빈 방을 검색하고 있습니다...";
+            document.getElementById('match-status').innerText = "서버 검색 시작...";
+            log("매칭 시작...");
 
-            const roomsRef = ref(db, 'rooms');
-            // 최근 50개의 방을 가져와서 빈 방이 있는지 확인
-            const snapshot = await get(query(roomsRef, limitToLast(50)));
-            let joinedRoomId = null;
-
-            if (snapshot.exists()) {
-                const rooms = snapshot.val();
-                const roomIds = Object.keys(rooms);
+            try {
+                const roomsRef = ref(db, 'rooms');
+                log("방 목록 가져오는 중...");
                 
-                // 생성된 순서대로 확인하며 'waiting' 상태인 방 찾기
-                for (let id of roomIds) {
-                    if (rooms[id].status === 'waiting') {
-                        const targetRoomRef = ref(db, `rooms/${id}`);
-                        
-                        // 트랜잭션을 사용하여 동시 접속 방지
-                        const result = await runTransaction(targetRoomRef, (currentData) => {
-                            if (currentData && currentData.status === 'waiting') {
-                                currentData.status = 'matching_complete'; // 상태 변경
-                                return currentData;
-                            }
-                            return; // 이미 찼거나 없으면 중단
-                        });
+                // 읽기 권한 테스트를 겸함
+                const snapshot = await get(query(roomsRef, limitToLast(30))); 
+                log("방 목록 수신 완료");
 
-                        if (result.committed) {
-                            joinedRoomId = id;
-                            state.myRole = 'guest'; // 나는 게스트(P2)가 됨
-                            console.log("Joined room as Guest:", id);
-                            setupRoomListener(joinedRoomId);
-                            break;
+                let joinedRoomId = null;
+
+                if (snapshot.exists()) {
+                    const rooms = snapshot.val();
+                    const roomIds = Object.keys(rooms);
+                    log(`현재 방 개수: ${roomIds.length}개`);
+                    
+                    for (let id of roomIds) {
+                        if (rooms[id].status === 'waiting') {
+                            log(`빈 방 발견: ${id}. 입장 시도...`);
+                            const targetRoomRef = ref(db, `rooms/${id}`);
+                            
+                            const result = await runTransaction(targetRoomRef, (currentData) => {
+                                if (currentData && currentData.status === 'waiting') {
+                                    currentData.status = 'matching_complete';
+                                    return currentData;
+                                }
+                                return;
+                            });
+
+                            if (result.committed) {
+                                joinedRoomId = id;
+                                state.myRole = 'guest'; 
+                                log("✅ 방 입장 성공 (Guest)");
+                                setupRoomListener(joinedRoomId);
+                                break;
+                            } else {
+                                log("❌ 입장 실패 (다른 사람이 선점)");
+                            }
                         }
                     }
+                } else {
+                    log("방이 하나도 없음 (첫 생성)");
                 }
-            }
 
-            // 들어갈 방이 없으면 새로 생성
-            if (!joinedRoomId) {
-                document.getElementById('match-status').innerText = "대기실 생성 중... 상대를 기다립니다.";
-                const newRoomRef = push(roomsRef);
-                joinedRoomId = newRoomRef.key;
-                state.myRole = 'host'; // 나는 호스트(P1)가 됨
+                if (!joinedRoomId) {
+                    log("들어갈 방이 없음. 호스트가 됩니다.");
+                    document.getElementById('match-status').innerText = "방 생성 중... (Host)";
+                    
+                    const newRoomRef = push(roomsRef);
+                    joinedRoomId = newRoomRef.key;
+                    state.myRole = 'host';
+                    
+                    await set(newRoomRef, { 
+                        status: 'waiting', 
+                        hostJoined: true, 
+                        createdAt: Date.now() 
+                    });
+                    log(`✅ 방 생성 완료: ${joinedRoomId}`);
+                    setupRoomListener(joinedRoomId);
+                }
+            } catch (err) {
+                log(`🚨 치명적 에러: ${err.code}`);
+                log(`내용: ${err.message}`);
                 
-                await set(newRoomRef, { 
-                    status: 'waiting', 
-                    hostJoined: true, 
-                    createdAt: Date.now() 
-                });
-                console.log("Created room as Host:", joinedRoomId);
-                setupRoomListener(joinedRoomId);
+                if (err.code === 'PERMISSION_DENIED') {
+                    document.getElementById('match-status').innerText = "오류: 권한 거부됨!";
+                    alert("파이어베이스 Rules 설정을 'true'로 바꿔야 합니다!");
+                } else {
+                     document.getElementById('match-status').innerText = "오류: " + err.message;
+                }
             }
         }
 
         function setupRoomListener(id) {
             state.matchingId = id;
             roomRef = ref(db, 'rooms/' + id);
+            log(`방 리스너 연결: ${id}`);
             
             onValue(roomRef, (snap) => {
                 const data = snap.val();
-                if (!data) return; // 방이 삭제됨
+                if (!data) {
+                    log("⚠️ 방 데이터가 사라짐 (삭제됨?)");
+                    return;
+                }
 
                 // 1. 매칭 완료 처리
                 if (data.status === 'matching_complete') {
                     document.getElementById('overlay-title').innerText = "매칭 완료!";
-                    document.getElementById('match-status').innerText = "가위바위보를 준비하세요...";
+                    document.getElementById('match-status').innerText = "곧 게임이 시작됩니다...";
                     document.getElementById('loading-spinner').classList.add('hidden');
                     
-                    // 호스트가 잠시 후 RPS 단계로 넘김
                     if (state.myRole === 'host') {
-                        setTimeout(() => update(roomRef, { status: 'rps' }), 1500);
+                        // 호스트가 약간 딜레이 후 RPS로 넘김
+                        setTimeout(() => update(roomRef, { status: 'rps' }), 1000);
                     }
                 }
 
-                // 2. 가위바위보 단계
+                // 2. 가위바위보
                 if (data.status === 'rps') {
-                    document.getElementById('overlay-title').innerText = "가위바위보!";
-                    document.getElementById('rps-ui').classList.remove('hidden');
-                    document.getElementById('match-status').innerText = "순서를 정하세요.";
-                    
-                    // 둘 다 냈으면 판정
+                    if(document.getElementById('rps-ui').classList.contains('hidden')) {
+                        log("가위바위보 단계 진입");
+                        document.getElementById('overlay-title').innerText = "가위바위보!";
+                        document.getElementById('rps-ui').classList.remove('hidden');
+                        document.getElementById('match-status').innerText = "선택하세요.";
+                    }
                     if(data.rps_host && data.rps_guest) {
                         judgeRPS(data.rps_host, data.rps_guest);
                     }
                 }
 
-                // 3. 게임 플레이 단계
+                // 3. 게임 플레이
                 if (data.status === 'playing') {
-                    document.getElementById('overlay-screen').classList.add('hidden');
-                    document.getElementById('top-info').classList.remove('hidden');
-                    document.getElementById('bottom-panel').classList.remove('hidden');
+                    if(!document.getElementById('overlay-screen').classList.contains('hidden')) {
+                        log("게임 시작!");
+                        document.getElementById('overlay-screen').classList.add('hidden');
+                        document.getElementById('top-info').classList.remove('hidden');
+                        document.getElementById('bottom-panel').classList.remove('hidden');
+                    }
                     
                     const s = JSON.parse(data.gameState); 
                     state.currentTurn = s.currentTurn; 
@@ -294,6 +361,7 @@
         }
 
         window.chooseRPS = (choice) => { 
+            log(`가위바위보 선택: ${choice}`);
             const updates = {}; 
             updates[state.myRole==='host'?'rps_host':'rps_guest']=choice; 
             update(roomRef, updates); 
@@ -306,8 +374,8 @@
                 if(state.myRole === 'host') {
                     setTimeout(()=>update(roomRef, {rps_host:null, rps_guest:null}), 1000); 
                 }
-                document.getElementById('overlay-title').innerText = "무승부! 다시!"; 
-                document.getElementById('match-status').innerText = "잠시 후 다시 선택합니다.";
+                log("가위바위보 무승부 -> 재경기");
+                document.getElementById('overlay-title').innerText = "비겼습니다!"; 
                 setTimeout(() => {
                     document.getElementById('rps-ui').classList.remove('hidden'); 
                 }, 1000);
@@ -317,10 +385,10 @@
             const winMap = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
             const hostWins = winMap[h] === g;
             
-            // 승자가 선공(P1)을 가져감
             state.myRole = (state.myRole === 'host' ? (hostWins?'p1':'p2') : (hostWins?'p2':'p1'));
+            log(`승부 결정! 나는 ${state.myRole} 입니다.`);
             
-            if (state.myRole === 'p1') { // 선공(P1)이 초기 상태 세팅 후 playing으로 전환
+            if (state.myRole === 'p1') { 
                 const initS = { 
                     currentTurn:'p1', 
                     phase:'place', 
