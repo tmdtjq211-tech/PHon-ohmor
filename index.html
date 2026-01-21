@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>대학전쟁3 - 블록 오목 (Strict Gravity)</title>
+    <title>대학전쟁3 - 블록 오목 (Strict Physics)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #050505; color: #fff; font-family: 'Segoe UI', sans-serif; touch-action: none; }
         
@@ -38,8 +38,16 @@
             background: #4CAF50; color: #000; border: none; box-shadow: 0 0 10px rgba(76, 175, 80, 0.4); 
             display: none; 
         }
-        #confirm-btn:active { background: #45a049; }
-
+        
+        /* 경고 토스트 메시지 */
+        #toast-msg {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            background: rgba(255, 50, 50, 0.9); color: white; padding: 15px 25px;
+            border-radius: 30px; font-weight: bold; font-size: 16px;
+            pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 1000;
+            white-space: nowrap; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+        }
+        
         /* 로비 */
         #lobby { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
@@ -92,6 +100,8 @@
             <button onclick="location.reload()" style="background:#220000; border-color:#550000; color:#ffaaaa; padding: 10px 0; font-size:14px; margin-top:5px;">나가기</button>
         </div>
     </div>
+
+    <div id="toast-msg">경고 메시지</div>
 
     <div id="overlay-screen" class="hidden">
         <h2 id="overlay-title" style="color:#4CAF50;">대기 중...</h2>
@@ -245,45 +255,58 @@
         }
 
         // ==========================================
-        // 🔥 수정된 규칙: 엄격한 물리(중력) 체크
+        //  토스트 메시지 기능
         // ==========================================
-        function canPlace(gx, gz, rot, mode, ignoreId = null) {
+        function showToast(msg) {
+            const toast = document.getElementById('toast-msg');
+            toast.innerText = msg;
+            toast.style.opacity = '1';
+            clearTimeout(window.toastTimer);
+            window.toastTimer = setTimeout(() => {
+                toast.style.opacity = '0';
+            }, 1500);
+        }
+
+        // ==========================================
+        // 🔥 검증 로직 (엄격한 물리 법칙)
+        // ==========================================
+        function validateMove(gx, gz, rot, mode, ignoreId = null) {
             const offsets = getOffsets(mode, rot);
             
-            // 1. 보드 범위 체크
+            // 1. 범위 체크
             if(!offsets.every(o => {
                 const nx = gx + o[0]; const nz = gz + o[2];
                 return nx >= 0 && nx < 5 && nz >= 0 && nz < 5;
-            })) return false;
+            })) return { valid: false, msg: "경기장을 벗어납니다!" };
 
             const tempBoard = JSON.parse(JSON.stringify(state.board));
             if(ignoreId) for(let i=0; i<25; i++) tempBoard[i] = tempBoard[i].filter(c => c.pieceId !== ignoreId);
 
-            // 2. 충돌 및 중력 체크 (모든 큐브 개별 검사)
+            // 2. 충돌 및 중력 체크
             for (let i = 0; i < offsets.length; i++) {
                 const o = offsets[i];
                 const nx = gx + o[0];
                 const nz = gz + o[2];
                 const ny = o[1];
 
-                // A. 이미 다른 블록이 있는 자리인지? (충돌)
-                if (tempBoard[nz*5 + nx].some(c => c.layer === ny)) return false;
+                // 이미 블록이 있는가?
+                if (tempBoard[nz*5 + nx].some(c => c.layer === ny)) return { valid: false, msg: "이미 블록이 있습니다!" };
 
-                // B. 허공에 떠 있는지? (물리 법칙)
-                // 바닥(Layer 0)이 아니면, 바로 아래(ny-1)에 무언가 있어야 함
+                // 바닥이 아닌 경우, 아래에 받침이 있는가?
                 if (ny > 0) {
-                    // 바로 아래에 이미 놓인 블록이 있는가?
                     const hasBoardSupport = tempBoard[nz*5 + nx].some(c => c.layer === ny - 1);
-                    
-                    // 또는, 바로 아래에 '지금 놓고 있는 블록'의 다른 부분이 있는가? (Self-support)
                     const hasSelfSupport = offsets.some(other => other[0] === o[0] && other[2] === o[2] && other[1] === ny - 1);
-
-                    if (!hasBoardSupport && !hasSelfSupport) {
-                        return false; // 공중 부양 금지!
-                    }
+                    
+                    // 3개 중 하나라도 떠 있으면 안됨
+                    if (!hasBoardSupport && !hasSelfSupport) return { valid: false, msg: "공중에 떠 있습니다! (받침 필요)" };
                 }
             }
-            return true;
+            return { valid: true };
+        }
+
+        // 단순 boolean 반환용 (AI 등에서 사용)
+        function canPlace(gx, gz, rot, mode, ignoreId = null) {
+            return validateMove(gx, gz, rot, mode, ignoreId).valid;
         }
 
         function handleCellClick(gx, gz) {
@@ -292,9 +315,12 @@
             document.getElementById('confirm-btn').style.display = 'none';
 
             if(state.phase === 'place') {
-                if(canPlace(gx, gz, state.rotation, state.placeMode)) {
+                const check = validateMove(gx, gz, state.rotation, state.placeMode);
+                if(check.valid) {
                     state.pendingMove = { type: 'place', x: gx, z: gz, rot: state.rotation, mode: state.placeMode };
                     document.getElementById('confirm-btn').style.display = 'block';
+                } else {
+                    showToast(check.msg);
                 }
             } else {
                 const stack = state.board[gz*5+gx];
@@ -306,11 +332,13 @@
                         state.rotation = p.rot; state.placeMode = p.mode; renderAll();
                     }
                 } else {
-                    if(canPlace(gx, gz, state.rotation, state.placeMode, state.selectedId)) {
+                    const check = validateMove(gx, gz, state.rotation, state.placeMode, state.selectedId);
+                    if(check.valid) {
                          state.pendingMove = { type: 'move', x: gx, z: gz, rot: state.rotation, mode: state.placeMode };
                          document.getElementById('confirm-btn').style.display = 'block';
                     } else { 
                         state.selectedId = null; renderAll(); 
+                        showToast(check.msg);
                     }
                 }
             }
