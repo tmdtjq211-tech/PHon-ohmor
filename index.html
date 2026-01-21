@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>대학전쟁3 - 블록 오목 (Strict Physics)</title>
+    <title>대학전쟁3 - 블록 오목 (Auto Match)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #050505; color: #fff; font-family: 'Segoe UI', sans-serif; touch-action: none; }
         
@@ -54,14 +54,17 @@
             background: rgba(20, 20, 20, 0.95); padding: 30px; border: 1px solid #4CAF50; 
             border-radius: 12px; text-align: center; pointer-events: auto; width: 80%; max-width: 300px;
         }
-        input { width: 100%; padding: 12px; margin: 10px 0; background: #111; border: 1px solid #444; color: #fff; border-radius: 6px; text-align: center; font-size: 16px; }
-
+        
         /* 오버레이 */
         #overlay-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 500; pointer-events: auto; }
-        .rps-btn { width: 80px; height: 80px; font-size: 35px; margin: 10px; background: #222; border: 2px solid #4CAF50; border-radius: 50%; display: inline-flex; justify-content: center; align-items: center; color: white; }
+        .rps-btn { width: 80px; height: 80px; font-size: 35px; margin: 10px; background: #222; border: 2px solid #4CAF50; border-radius: 50%; display: inline-flex; justify-content: center; align-items: center; color: white; cursor: pointer; }
         
         #status-msg { position: absolute; top: 80px; width: 100%; text-align: center; font-size: 24px; font-weight: bold; color: #ffeb3b; text-shadow: 0 2px 4px #000; pointer-events: none; }
         .hidden { display: none !important; }
+        
+        /* 로딩 스피너 */
+        .loader { border: 5px solid #333; border-top: 5px solid #4CAF50; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
     <script type="importmap">
         { "imports": { 
@@ -84,10 +87,10 @@
 
         <div id="lobby">
             <h1 style="color:#4CAF50; margin-bottom:20px;">BLOCK OMOK</h1>
+            <p style="color:#888; font-size:12px; margin-bottom:20px;">엄격한 물리 엔진 버전</p>
             <button onclick="startMode('ai')">🤖 AI 연습 (싱글)</button>
             <hr style="border-color:#333; margin:15px 0;">
-            <input type="number" id="room-input" placeholder="방 코드 (예: 55)" value="55">
-            <button onclick="startMode('online')" style="border-color:#2196F3; color:#2196F3; background:transparent;">👥 온라인 대결</button>
+            <button onclick="startMode('online')" style="border-color:#2196F3; color:#2196F3; background:transparent;">⚡ 빠른 매칭 (Online)</button>
         </div>
 
         <div id="bottom-panel" class="hidden">
@@ -105,7 +108,9 @@
 
     <div id="overlay-screen" class="hidden">
         <h2 id="overlay-title" style="color:#4CAF50;">대기 중...</h2>
-        <p id="match-status" style="color:#888;">방 코드: <span id="display-room-id">-</span></p>
+        <div id="loading-spinner" class="loader hidden"></div>
+        <p id="match-status" style="color:#888; font-size: 14px; margin-top: 10px;">상대를 찾는 중입니다...</p>
+        
         <div id="rps-ui" class="hidden">
             <div style="display:flex;">
                 <div class="rps-btn" onclick="chooseRPS('rock')">✊</div>
@@ -121,7 +126,7 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { initializeApp } from "firebase/app";
-        import { getDatabase, ref, set, onValue, update } from "firebase/database";
+        import { getDatabase, ref, set, onValue, update, push, get, query, limitToLast, runTransaction } from "firebase/database";
 
         const firebaseConfig = {
             apiKey: "AIzaSyDcKWKTei9L2Sat-XxinlXknabIcHgmjGs",
@@ -154,9 +159,7 @@
             document.getElementById('lobby').classList.add('hidden');
             initThree();
             if (mode === 'online') {
-                const id = document.getElementById('room-input').value;
-                if(!id) return alert("방 코드를 입력하세요!");
-                setupMatching(id);
+                findAndJoinMatch(); // 자동 매칭 시작
             } else {
                 setupInitialPieces();
                 document.getElementById('top-info').classList.remove('hidden');
@@ -164,42 +167,160 @@
             }
         };
 
+        // ==========================================
+        // 🔥 실시간 자동 매칭 로직 (개선됨)
+        // ==========================================
+        async function findAndJoinMatch() {
+            // UI 업데이트
+            document.getElementById('overlay-screen').classList.remove('hidden');
+            document.getElementById('overlay-title').innerText = "매칭 중...";
+            document.getElementById('loading-spinner').classList.remove('hidden');
+            document.getElementById('match-status').innerText = "빈 방을 검색하고 있습니다...";
+
+            const roomsRef = ref(db, 'rooms');
+            // 최근 50개의 방을 가져와서 빈 방이 있는지 확인 (간단한 매칭 풀)
+            const snapshot = await get(query(roomsRef, limitToLast(50)));
+            let joinedRoomId = null;
+
+            if (snapshot.exists()) {
+                const rooms = snapshot.val();
+                const roomIds = Object.keys(rooms);
+                
+                // 생성된 순서대로 확인하며 'waiting' 상태인 방 찾기
+                for (let id of roomIds) {
+                    if (rooms[id].status === 'waiting') {
+                        const targetRoomRef = ref(db, `rooms/${id}`);
+                        
+                        // 트랜잭션을 사용하여 동시 접속 방지 (먼저 잡는 사람이 임자)
+                        const result = await runTransaction(targetRoomRef, (currentData) => {
+                            if (currentData && currentData.status === 'waiting') {
+                                currentData.status = 'matching_complete'; // 상태 변경
+                                return currentData;
+                            }
+                            return; // 이미 찼거나 없으면 중단
+                        });
+
+                        if (result.committed) {
+                            joinedRoomId = id;
+                            state.myRole = 'guest'; // 나는 게스트(P2)가 됨
+                            console.log("Joined room as Guest:", id);
+                            setupRoomListener(joinedRoomId);
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // 들어갈 방이 없으면 새로 생성
+            if (!joinedRoomId) {
+                document.getElementById('match-status').innerText = "대기실 생성 중... 상대를 기다립니다.";
+                const newRoomRef = push(roomsRef);
+                joinedRoomId = newRoomRef.key;
+                state.myRole = 'host'; // 나는 호스트(P1)가 됨
+                
+                await set(newRoomRef, { 
+                    status: 'waiting', 
+                    hostJoined: true, 
+                    createdAt: Date.now() 
+                });
+                console.log("Created room as Host:", joinedRoomId);
+                setupRoomListener(joinedRoomId);
+            }
+        }
+
+        function setupRoomListener(id) {
+            state.matchingId = id;
+            roomRef = ref(db, 'rooms/' + id);
+            
+            onValue(roomRef, (snap) => {
+                const data = snap.val();
+                if (!data) return; // 방이 삭제됨
+
+                // 1. 매칭 완료 처리
+                if (data.status === 'matching_complete') {
+                    document.getElementById('overlay-title').innerText = "매칭 완료!";
+                    document.getElementById('match-status').innerText = "가위바위보를 준비하세요...";
+                    document.getElementById('loading-spinner').classList.add('hidden');
+                    
+                    // 호스트가 잠시 후 RPS 단계로 넘김
+                    if (state.myRole === 'host') {
+                        setTimeout(() => update(roomRef, { status: 'rps' }), 1500);
+                    }
+                }
+
+                // 2. 가위바위보 단계
+                if (data.status === 'rps') {
+                    document.getElementById('overlay-title').innerText = "가위바위보!";
+                    document.getElementById('rps-ui').classList.remove('hidden');
+                    document.getElementById('match-status').innerText = "순서를 정하세요.";
+                    
+                    // 둘 다 냈으면 판정
+                    if(data.rps_host && data.rps_guest) {
+                        judgeRPS(data.rps_host, data.rps_guest);
+                    }
+                }
+
+                // 3. 게임 플레이 단계
+                if (data.status === 'playing') {
+                    document.getElementById('overlay-screen').classList.add('hidden');
+                    document.getElementById('top-info').classList.remove('hidden');
+                    document.getElementById('bottom-panel').classList.remove('hidden');
+                    
+                    const s = JSON.parse(data.gameState); 
+                    state.currentTurn = s.currentTurn; 
+                    state.phase = s.phase; 
+                    state.pieces = s.pieces; 
+                    state.placeCount = s.placeCount; 
+                    state.winner = s.winner;
+                    
+                    rebuildBoard(); 
+                    renderAll(); 
+                    updateUI();
+                }
+            });
+        }
+
         function setupInitialPieces() {
             addPieceData('s1', 'p1', 1, 1, 0, 'flat');
             addPieceData('s2', 'p2', 3, 3, 2, 'flat');
             renderAll();
         }
 
-        function setupMatching(id) {
-            state.matchingId = id;
-            document.getElementById('display-room-id').innerText = id;
-            document.getElementById('overlay-screen').classList.remove('hidden');
-            roomRef = ref(db, 'rooms/' + id);
-            onValue(roomRef, (snap) => {
-                const data = snap.val();
-                if (!data) { state.myRole = 'host'; set(roomRef, { hostJoined: true, status: 'waiting' }); }
-                else {
-                    if (data.status === 'waiting' && state.myRole !== 'host') { state.myRole = 'guest'; update(roomRef, { status: 'matching_complete' }); }
-                    if (data.status === 'matching_complete') { document.getElementById('overlay-title').innerText = "매칭 완료!"; setTimeout(() => update(roomRef, { status: 'rps' }), 1000); }
-                    if (data.status === 'rps') { document.getElementById('overlay-title').innerText = "가위바위보!"; document.getElementById('rps-ui').classList.remove('hidden'); if(data.rps_host && data.rps_guest) judgeRPS(data.rps_host, data.rps_guest); }
-                    if (data.status === 'playing') {
-                        document.getElementById('overlay-screen').classList.add('hidden');
-                        document.getElementById('top-info').classList.remove('hidden');
-                        document.getElementById('bottom-panel').classList.remove('hidden');
-                        const s = JSON.parse(data.gameState); state.currentTurn = s.currentTurn; state.phase = s.phase; state.pieces = s.pieces; state.placeCount = s.placeCount; state.winner = s.winner;
-                        rebuildBoard(); renderAll(); updateUI();
-                    }
-                }
-            });
-        }
-        window.chooseRPS = (choice) => { const updates = {}; updates[state.myRole==='host'?'rps_host':'rps_guest']=choice; update(roomRef, updates); document.getElementById('rps-ui').classList.add('hidden'); document.getElementById('overlay-title').innerText="상대 대기 중..."; };
+        window.chooseRPS = (choice) => { 
+            const updates = {}; 
+            updates[state.myRole==='host'?'rps_host':'rps_guest']=choice; 
+            update(roomRef, updates); 
+            document.getElementById('rps-ui').classList.add('hidden'); 
+            document.getElementById('match-status').innerText = "상대 선택 대기 중..."; 
+        };
+
         function judgeRPS(h, g) {
-            if (h===g) { if(state.myRole==='host') setTimeout(()=>update(roomRef,{rps_host:null,rps_guest:null}),1000); document.getElementById('overlay-title').innerText="무승부!"; document.getElementById('rps-ui').classList.remove('hidden'); return; }
+            if (h === g) { 
+                if(state.myRole === 'host') {
+                    setTimeout(()=>update(roomRef, {rps_host:null, rps_guest:null}), 1000); 
+                }
+                document.getElementById('overlay-title').innerText = "무승부! 다시!"; 
+                document.getElementById('match-status').innerText = "잠시 후 다시 선택합니다.";
+                setTimeout(() => {
+                    document.getElementById('rps-ui').classList.remove('hidden'); 
+                }, 1000);
+                return; 
+            }
+            
             const winMap = { rock: 'scissors', paper: 'rock', scissors: 'paper' };
             const hostWins = winMap[h] === g;
-            state.myRole = (state.myRole==='host'?(hostWins?'p1':'p2'):(hostWins?'p2':'p1'));
-            if (state.myRole==='p1') {
-                const initS = { currentTurn:'p1', phase:'place', pieces:[{id:'s1',owner:'p1',x:1,z:1,rot:0,mode:'flat'},{id:'s2',owner:'p2',x:3,z:3,rot:2,mode:'flat'}], placeCount:{p1:1,p2:1} };
+            
+            // 승자가 선공(P1)을 가져감
+            // 내가 호스트인데 이겼으면 P1, 졌으면 P2
+            state.myRole = (state.myRole === 'host' ? (hostWins?'p1':'p2') : (hostWins?'p2':'p1'));
+            
+            if (state.myRole === 'p1') { // 선공(P1)이 초기 상태 세팅 후 playing으로 전환
+                const initS = { 
+                    currentTurn:'p1', 
+                    phase:'place', 
+                    pieces:[{id:'s1',owner:'p1',x:1,z:1,rot:0,mode:'flat'}, {id:'s2',owner:'p2',x:3,z:3,rot:2,mode:'flat'}], 
+                    placeCount:{p1:1,p2:1} 
+                };
                 update(roomRef, { status: 'playing', gameState: JSON.stringify(initS) });
             }
         }
@@ -254,9 +375,6 @@
             });
         }
 
-        // ==========================================
-        //  토스트 메시지 기능
-        // ==========================================
         function showToast(msg) {
             const toast = document.getElementById('toast-msg');
             toast.innerText = msg;
@@ -268,12 +386,10 @@
         }
 
         // ==========================================
-        // 🔥 검증 로직 (엄격한 물리 법칙)
+        // 🔥 검증 로직 (엄격한 물리 법칙) - 유지
         // ==========================================
         function validateMove(gx, gz, rot, mode, ignoreId = null) {
             const offsets = getOffsets(mode, rot);
-            
-            // 1. 범위 체크
             if(!offsets.every(o => {
                 const nx = gx + o[0]; const nz = gz + o[2];
                 return nx >= 0 && nx < 5 && nz >= 0 && nz < 5;
@@ -282,29 +398,23 @@
             const tempBoard = JSON.parse(JSON.stringify(state.board));
             if(ignoreId) for(let i=0; i<25; i++) tempBoard[i] = tempBoard[i].filter(c => c.pieceId !== ignoreId);
 
-            // 2. 충돌 및 중력 체크
             for (let i = 0; i < offsets.length; i++) {
                 const o = offsets[i];
                 const nx = gx + o[0];
                 const nz = gz + o[2];
                 const ny = o[1];
 
-                // 이미 블록이 있는가?
                 if (tempBoard[nz*5 + nx].some(c => c.layer === ny)) return { valid: false, msg: "이미 블록이 있습니다!" };
 
-                // 바닥이 아닌 경우, 아래에 받침이 있는가?
                 if (ny > 0) {
                     const hasBoardSupport = tempBoard[nz*5 + nx].some(c => c.layer === ny - 1);
                     const hasSelfSupport = offsets.some(other => other[0] === o[0] && other[2] === o[2] && other[1] === ny - 1);
-                    
-                    // 3개 중 하나라도 떠 있으면 안됨
                     if (!hasBoardSupport && !hasSelfSupport) return { valid: false, msg: "공중에 떠 있습니다! (받침 필요)" };
                 }
             }
             return { valid: true };
         }
 
-        // 단순 boolean 반환용 (AI 등에서 사용)
         function canPlace(gx, gz, rot, mode, ignoreId = null) {
             return validateMove(gx, gz, rot, mode, ignoreId).valid;
         }
