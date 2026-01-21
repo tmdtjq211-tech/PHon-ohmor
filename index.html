@@ -3,22 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>대학전쟁3 - 블록 오목 (Auth Ver)</title>
+    <title>대학전쟁3 - 블록 오목 (Perfect Match)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #050505; color: #fff; font-family: 'Segoe UI', sans-serif; touch-action: none; }
         
-        /* UI 레이아웃 */
         #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; display: flex; flex-direction: column; justify-content: space-between; }
         
-        /* 디버그 로그 창 */
         #debug-console {
             position: absolute; bottom: 100px; left: 10px; width: 300px; height: 150px;
-            background: rgba(0,0,0,0.8); border: 1px solid #4CAF50; color: #0f0;
+            background: rgba(0,0,0,0.8); border: 1px solid #2196F3; color: #fff;
             font-size: 11px; overflow-y: scroll; pointer-events: auto; padding: 5px;
             z-index: 9999; font-family: monospace; display: block;
         }
 
-        /* 상단 정보창 */
         #top-info { 
             pointer-events: auto; background: rgba(0, 0, 0, 0.8); padding: 10px 20px; 
             display: flex; justify-content: space-between; align-items: center;
@@ -26,7 +23,6 @@
         }
         .status-badge { font-weight: bold; padding: 5px 10px; border-radius: 4px; font-size: 14px; }
         
-        /* 하단 컨트롤 패널 */
         #bottom-panel { 
             pointer-events: auto; background: rgba(20, 20, 20, 0.95); padding: 15px; 
             border-top: 2px solid #4CAF50; border-radius: 15px 15px 0 0; 
@@ -47,7 +43,6 @@
             display: none; 
         }
         
-        /* 경고 토스트 메시지 */
         #toast-msg {
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
             background: rgba(255, 50, 50, 0.9); color: white; padding: 15px 25px;
@@ -56,21 +51,18 @@
             white-space: nowrap; box-shadow: 0 5px 15px rgba(0,0,0,0.5);
         }
         
-        /* 로비 */
         #lobby { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
             background: rgba(20, 20, 20, 0.95); padding: 30px; border: 1px solid #4CAF50; 
             border-radius: 12px; text-align: center; pointer-events: auto; width: 80%; max-width: 300px;
         }
         
-        /* 오버레이 */
         #overlay-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.95); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 500; pointer-events: auto; }
         .rps-btn { width: 80px; height: 80px; font-size: 35px; margin: 10px; background: #222; border: 2px solid #4CAF50; border-radius: 50%; display: inline-flex; justify-content: center; align-items: center; color: white; cursor: pointer; }
         
         #status-msg { position: absolute; top: 80px; width: 100%; text-align: center; font-size: 24px; font-weight: bold; color: #ffeb3b; text-shadow: 0 2px 4px #000; pointer-events: none; }
         .hidden { display: none !important; }
         
-        /* 로딩 스피너 */
         .loader { border: 5px solid #333; border-top: 5px solid #4CAF50; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin: 20px auto; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
@@ -97,13 +89,13 @@
 
         <div id="lobby">
             <h1 style="color:#4CAF50; margin-bottom:20px;">BLOCK OMOK</h1>
-            <p style="color:#888; font-size:12px; margin-bottom:20px;">익명 로그인 활성화됨</p>
+            <p style="color:#888; font-size:12px; margin-bottom:20px;">매칭 시스템 강화됨</p>
             <button onclick="startMode('ai')">🤖 AI 연습 (싱글)</button>
             <hr style="border-color:#333; margin:15px 0;">
             <button onclick="startMode('online')" style="border-color:#2196F3; color:#2196F3; background:transparent;">⚡ 빠른 매칭 (Online)</button>
         </div>
         
-        <div id="debug-console">시스템 시작...<br></div>
+        <div id="debug-console">시스템 준비 완료.<br></div>
 
         <div id="bottom-panel" class="hidden">
             <button id="confirm-btn" onclick="confirmMove()">✅ 여기에 착수하기</button>
@@ -138,10 +130,9 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { initializeApp } from "firebase/app";
-        import { getDatabase, ref, set, onValue, update, push, get, query, limitToLast, runTransaction } from "firebase/database";
-        import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth"; // 🔥 Auth 모듈 추가
+        import { getDatabase, ref, set, onValue, update, push, get, query, limitToFirst, orderByChild, equalTo, runTransaction } from "firebase/database";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-        // 로깅 함수
         function log(msg) {
             const consoleDiv = document.getElementById('debug-console');
             const time = new Date().toLocaleTimeString();
@@ -163,39 +154,20 @@
 
         let app, db, auth, myUid;
 
-        // 🔥 파이어베이스 초기화 및 로그인 로직
         try {
             app = initializeApp(firebaseConfig);
             db = getDatabase(app);
             auth = getAuth(app);
-            log("Firebase 초기화 완료");
+            log("Firebase 로드됨");
 
-            // 🔥 익명 로그인 시도
-            signInAnonymously(auth)
-                .then(() => {
-                    log("🔑 익명 로그인 성공!");
-                })
-                .catch((error) => {
-                    log("❌ 로그인 실패: " + error.message);
-                });
+            signInAnonymously(auth).catch((error) => {
+                log("❌ 로그인 에러: " + error.message);
+            });
 
-            // 로그인 상태 감지
             onAuthStateChanged(auth, (user) => {
                 if (user) {
                     myUid = user.uid;
-                    log(`사용자 인증됨 (UID: ${myUid.slice(0,5)}...)`);
-                    
-                    // 연결 상태 확인 (로그인 후 체크)
-                    const connectedRef = ref(db, ".info/connected");
-                    onValue(connectedRef, (snap) => {
-                        if (snap.val() === true) {
-                            log("🟢 DB 서버 연결됨!");
-                        } else {
-                            log("🔴 DB 연결 끊김");
-                        }
-                    });
-                } else {
-                    log("⚠️ 로그아웃 상태");
+                    log(`✅ 로그인 성공 (ID: ${myUid.slice(0,5)})`);
                 }
             });
 
@@ -218,7 +190,7 @@
 
         window.startMode = (mode) => {
             if (mode === 'online' && !myUid) {
-                alert("아직 서버 로그인 중입니다. 잠시만 기다려주세요.");
+                alert("서버 로그인 중입니다. 잠시만 기다려주세요.");
                 return;
             }
             state.mode = mode;
@@ -235,59 +207,63 @@
         };
 
         // ==========================================
-        // 🔥 실시간 자동 매칭 로직
+        // 🔥 개선된 매칭 로직 (waiting 상태만 정밀 검색)
         // ==========================================
         async function findAndJoinMatch() {
             document.getElementById('overlay-screen').classList.remove('hidden');
             document.getElementById('overlay-title').innerText = "매칭 중...";
             document.getElementById('loading-spinner').classList.remove('hidden');
             document.getElementById('match-status').innerText = "빈 방 검색 중...";
-            log("매칭 시작...");
+            log("매칭 시작 (정밀 검색)...");
 
             try {
                 const roomsRef = ref(db, 'rooms');
-                // rooms_pro 대신 기존 로직대로 'rooms' 사용 (RTDB 전용)
-                const snapshot = await get(query(roomsRef, limitToLast(30))); 
-
+                
+                // 🚨 중요: 'waiting' 상태인 방만 최대 50개 가져옵니다.
+                // 이 쿼리가 작동하려면 Rules에 .indexOn이 설정되어 있어야 합니다.
+                const waitingQuery = query(roomsRef, orderByChild("status"), equalTo("waiting"), limitToFirst(50));
+                
+                const snapshot = await get(waitingQuery); 
                 let joinedRoomId = null;
 
                 if (snapshot.exists()) {
                     const rooms = snapshot.val();
                     const roomIds = Object.keys(rooms);
+                    log(`대기 중인 방 ${roomIds.length}개 발견`);
                     
                     for (let id of roomIds) {
-                        if (rooms[id].status === 'waiting') {
-                            const targetRoomRef = ref(db, `rooms/${id}`);
-                            
-                            const result = await runTransaction(targetRoomRef, (currentData) => {
-                                if (currentData && currentData.status === 'waiting') {
-                                    currentData.status = 'matching_complete';
-                                    currentData.guestId = myUid; // 게스트 ID 기록
-                                    return currentData;
-                                }
-                                return;
-                            });
-
-                            if (result.committed) {
-                                joinedRoomId = id;
-                                state.myRole = 'guest'; 
-                                log("✅ 방 입장 성공 (Guest)");
-                                setupRoomListener(joinedRoomId);
-                                break;
+                        const targetRoomRef = ref(db, `rooms/${id}`);
+                        
+                        const result = await runTransaction(targetRoomRef, (currentData) => {
+                            if (currentData && currentData.status === 'waiting') {
+                                currentData.status = 'matching_complete';
+                                currentData.guestId = myUid; 
+                                return currentData;
                             }
+                            return;
+                        });
+
+                        if (result.committed) {
+                            joinedRoomId = id;
+                            state.myRole = 'guest'; 
+                            log(`✅ 방 입장 성공: ${id}`);
+                            setupRoomListener(joinedRoomId);
+                            break;
                         }
                     }
+                } else {
+                    log("대기 중인 방이 하나도 없습니다.");
                 }
 
                 if (!joinedRoomId) {
-                    log("빈 방 없음. 호스트 생성 중...");
+                    log("새 방을 생성합니다 (Host)");
                     const newRoomRef = push(roomsRef);
                     joinedRoomId = newRoomRef.key;
                     state.myRole = 'host';
                     
                     await set(newRoomRef, { 
                         status: 'waiting', 
-                        hostId: myUid, // 호스트 ID 기록
+                        hostId: myUid, 
                         createdAt: Date.now() 
                     });
                     log(`✅ 방 생성 완료: ${joinedRoomId}`);
@@ -295,7 +271,13 @@
                 }
             } catch (err) {
                 log(`🚨 에러: ${err.message}`);
-                document.getElementById('match-status').innerText = "오류: " + err.message;
+                
+                if(err.message.includes("index")) {
+                    alert("파이어베이스 Rules에 인덱스 설정을 안 하셨습니다! (매뉴얼 1단계 참고)");
+                    document.getElementById('match-status').innerText = "오류: Index 설정 필요";
+                } else {
+                    document.getElementById('match-status').innerText = "오류: " + err.message;
+                }
             }
         }
 
