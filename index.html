@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>대학전쟁3 - 블록 오목 (Perfect Match)</title>
+    <title>대학전쟁3 - 블록 오목 (Final Fix)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #050505; color: #fff; font-family: 'Segoe UI', sans-serif; touch-action: none; }
         
@@ -11,7 +11,7 @@
         
         #debug-console {
             position: absolute; bottom: 100px; left: 10px; width: 300px; height: 150px;
-            background: rgba(0,0,0,0.8); border: 1px solid #2196F3; color: #fff;
+            background: rgba(0,0,0,0.8); border: 1px solid #FFEB3B; color: #fff;
             font-size: 11px; overflow-y: scroll; pointer-events: auto; padding: 5px;
             z-index: 9999; font-family: monospace; display: block;
         }
@@ -89,7 +89,7 @@
 
         <div id="lobby">
             <h1 style="color:#4CAF50; margin-bottom:20px;">BLOCK OMOK</h1>
-            <p style="color:#888; font-size:12px; margin-bottom:20px;">매칭 시스템 강화됨</p>
+            <p style="color:#888; font-size:12px; margin-bottom:20px;">서버 설정 필요 없는 버전</p>
             <button onclick="startMode('ai')">🤖 AI 연습 (싱글)</button>
             <hr style="border-color:#333; margin:15px 0;">
             <button onclick="startMode('online')" style="border-color:#2196F3; color:#2196F3; background:transparent;">⚡ 빠른 매칭 (Online)</button>
@@ -130,7 +130,7 @@
         import * as THREE from 'three';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { initializeApp } from "firebase/app";
-        import { getDatabase, ref, set, onValue, update, push, get, query, limitToFirst, orderByChild, equalTo, runTransaction } from "firebase/database";
+        import { getDatabase, ref, set, onValue, update, push, get, query, limitToLast, runTransaction } from "firebase/database";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
         function log(msg) {
@@ -207,52 +207,53 @@
         };
 
         // ==========================================
-        // 🔥 개선된 매칭 로직 (waiting 상태만 정밀 검색)
+        // 🔥 무조건 되는 매칭 로직 (인덱스 제거함)
         // ==========================================
         async function findAndJoinMatch() {
             document.getElementById('overlay-screen').classList.remove('hidden');
             document.getElementById('overlay-title').innerText = "매칭 중...";
             document.getElementById('loading-spinner').classList.remove('hidden');
             document.getElementById('match-status').innerText = "빈 방 검색 중...";
-            log("매칭 시작 (정밀 검색)...");
+            log("매칭 시작 (단순 검색)...");
 
             try {
                 const roomsRef = ref(db, 'rooms');
                 
-                // 🚨 중요: 'waiting' 상태인 방만 최대 50개 가져옵니다.
-                // 이 쿼리가 작동하려면 Rules에 .indexOn이 설정되어 있어야 합니다.
-                const waitingQuery = query(roomsRef, orderByChild("status"), equalTo("waiting"), limitToFirst(50));
-                
-                const snapshot = await get(waitingQuery); 
+                // 🚨 수정됨: 복잡한 쿼리를 빼고 단순히 마지막 50개를 가져옵니다.
+                // 이러면 인덱스 설정 안해도 에러가 안 납니다.
+                const snapshot = await get(query(roomsRef, limitToLast(50))); 
                 let joinedRoomId = null;
 
                 if (snapshot.exists()) {
                     const rooms = snapshot.val();
                     const roomIds = Object.keys(rooms);
-                    log(`대기 중인 방 ${roomIds.length}개 발견`);
+                    log(`방 데이터 수신: ${roomIds.length}개`);
                     
                     for (let id of roomIds) {
-                        const targetRoomRef = ref(db, `rooms/${id}`);
-                        
-                        const result = await runTransaction(targetRoomRef, (currentData) => {
-                            if (currentData && currentData.status === 'waiting') {
-                                currentData.status = 'matching_complete';
-                                currentData.guestId = myUid; 
-                                return currentData;
-                            }
-                            return;
-                        });
+                        // 자바스크립트에서 직접 검사 (서버 설정 불필요)
+                        if (rooms[id].status === 'waiting') {
+                            const targetRoomRef = ref(db, `rooms/${id}`);
+                            
+                            const result = await runTransaction(targetRoomRef, (currentData) => {
+                                if (currentData && currentData.status === 'waiting') {
+                                    currentData.status = 'matching_complete';
+                                    currentData.guestId = myUid; 
+                                    return currentData;
+                                }
+                                return;
+                            });
 
-                        if (result.committed) {
-                            joinedRoomId = id;
-                            state.myRole = 'guest'; 
-                            log(`✅ 방 입장 성공: ${id}`);
-                            setupRoomListener(joinedRoomId);
-                            break;
+                            if (result.committed) {
+                                joinedRoomId = id;
+                                state.myRole = 'guest'; 
+                                log(`✅ 방 입장 성공: ${id}`);
+                                setupRoomListener(joinedRoomId);
+                                break;
+                            }
                         }
                     }
                 } else {
-                    log("대기 중인 방이 하나도 없습니다.");
+                    log("방 데이터가 없습니다.");
                 }
 
                 if (!joinedRoomId) {
@@ -271,13 +272,7 @@
                 }
             } catch (err) {
                 log(`🚨 에러: ${err.message}`);
-                
-                if(err.message.includes("index")) {
-                    alert("파이어베이스 Rules에 인덱스 설정을 안 하셨습니다! (매뉴얼 1단계 참고)");
-                    document.getElementById('match-status').innerText = "오류: Index 설정 필요";
-                } else {
-                    document.getElementById('match-status').innerText = "오류: " + err.message;
-                }
+                document.getElementById('match-status').innerText = "오류: " + err.message;
             }
         }
 
