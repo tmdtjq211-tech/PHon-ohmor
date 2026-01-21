@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>대학전쟁3 - 블록 오목 (Mobile Optimized)</title>
+    <title>대학전쟁3 - 블록 오목 (Strict Gravity)</title>
     <style>
         body { margin: 0; overflow: hidden; background: #050505; color: #fff; font-family: 'Segoe UI', sans-serif; touch-action: none; }
         
         /* UI 레이아웃 */
         #ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 100; display: flex; flex-direction: column; justify-content: space-between; }
         
-        /* 상단 정보창 (턴 정보 등) */
+        /* 상단 정보창 */
         #top-info { 
             pointer-events: auto; background: rgba(0, 0, 0, 0.8); padding: 10px 20px; 
             display: flex; justify-content: space-between; align-items: center;
@@ -18,7 +18,7 @@
         }
         .status-badge { font-weight: bold; padding: 5px 10px; border-radius: 4px; font-size: 14px; }
         
-        /* 하단 컨트롤 패널 (모바일 최적화) */
+        /* 하단 컨트롤 패널 */
         #bottom-panel { 
             pointer-events: auto; background: rgba(20, 20, 20, 0.95); padding: 15px; 
             border-top: 2px solid #4CAF50; border-radius: 15px 15px 0 0; 
@@ -26,7 +26,6 @@
             display: flex; flex-direction: column; gap: 10px;
         }
 
-        /* 버튼 스타일 */
         .control-row { display: flex; gap: 10px; }
         button { 
             flex: 1; padding: 15px 0; cursor: pointer; background: #333; color: #fff; 
@@ -35,14 +34,13 @@
         }
         button:active { background: #555; transform: scale(0.98); }
         
-        /* 착수 확정 버튼 (강조) */
         #confirm-btn { 
             background: #4CAF50; color: #000; border: none; box-shadow: 0 0 10px rgba(76, 175, 80, 0.4); 
-            display: none; /* 기본 숨김 */
+            display: none; 
         }
         #confirm-btn:active { background: #45a049; }
 
-        /* 로비 스타일 */
+        /* 로비 */
         #lobby { 
             position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
             background: rgba(20, 20, 20, 0.95); padding: 30px; border: 1px solid #4CAF50; 
@@ -86,7 +84,6 @@
 
         <div id="bottom-panel" class="hidden">
             <button id="confirm-btn" onclick="confirmMove()">✅ 여기에 착수하기</button>
-            
             <div class="control-row">
                 <button id="mode-btn" onclick="togglePlaceMode()">모드: 눕히기</button>
                 <button onclick="rotatePiece()">회전 (R)</button>
@@ -134,7 +131,6 @@
             board: Array(25).fill().map(() => []),
             pieces: [], placeCount: { p1: 1, p2: 1 },
             placeMode: 'flat', selectedId: null, rotation: 0, isTopView: true, winner: null, matchingId: null,
-            // 모바일용: 현재 선택된(미리보기 중인) 착수 정보
             pendingMove: null 
         };
 
@@ -164,7 +160,6 @@
             renderAll();
         }
 
-        // --- Firebase Logic ---
         function setupMatching(id) {
             state.matchingId = id;
             document.getElementById('display-room-id').innerText = id;
@@ -199,18 +194,16 @@
             }
         }
 
-        // --- Three.js Setup ---
         function initThree() {
             scene = new THREE.Scene();
             camera = new THREE.PerspectiveCamera(40, window.innerWidth/window.innerHeight, 0.1, 1000);
-            camera.position.set(0, 12, 6); // 모바일 시야각 조정
+            camera.position.set(0, 12, 6);
             camera.lookAt(0,0,0);
             renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('game-canvas'), antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
             controls = new OrbitControls(camera, renderer.domElement);
-            controls.enableDamping = true; 
-            controls.dampingFactor = 0.05;
+            controls.enableDamping = true; controls.dampingFactor = 0.05;
             scene.add(new THREE.AmbientLight(0xffffff, 0.8));
             const light = new THREE.DirectionalLight(0xffffff, 0.5); light.position.set(5, 10, 2); scene.add(light);
             scene.add(new THREE.GridHelper(5, 5, 0x4CAF50, 0x222222));
@@ -251,50 +244,68 @@
             });
         }
 
+        // ==========================================
+        // 🔥 수정된 규칙: 엄격한 물리(중력) 체크
+        // ==========================================
         function canPlace(gx, gz, rot, mode, ignoreId = null) {
             const offsets = getOffsets(mode, rot);
-            if(!offsets.every(o => (gx+o[0]>=0 && gx+o[0]<5 && gz+o[2]>=0 && gz+o[2]<5))) return false;
+            
+            // 1. 보드 범위 체크
+            if(!offsets.every(o => {
+                const nx = gx + o[0]; const nz = gz + o[2];
+                return nx >= 0 && nx < 5 && nz >= 0 && nz < 5;
+            })) return false;
+
             const tempBoard = JSON.parse(JSON.stringify(state.board));
             if(ignoreId) for(let i=0; i<25; i++) tempBoard[i] = tempBoard[i].filter(c => c.pieceId !== ignoreId);
-            for(let o of offsets) {
-                const nx = gx+o[0], nz = gz+o[2], ny = o[1];
-                if(tempBoard[nz*5+nx].some(c => c.layer === ny)) return false;
-                if(ny > 0) {
-                    const hasSup = offsets.some(p => p[0]===o[0] && p[2]===o[2] && p[1]===ny-1) || tempBoard[nz*5+nx].some(c => c.layer === ny-1);
-                    if(!hasSup) return false;
+
+            // 2. 충돌 및 중력 체크 (모든 큐브 개별 검사)
+            for (let i = 0; i < offsets.length; i++) {
+                const o = offsets[i];
+                const nx = gx + o[0];
+                const nz = gz + o[2];
+                const ny = o[1];
+
+                // A. 이미 다른 블록이 있는 자리인지? (충돌)
+                if (tempBoard[nz*5 + nx].some(c => c.layer === ny)) return false;
+
+                // B. 허공에 떠 있는지? (물리 법칙)
+                // 바닥(Layer 0)이 아니면, 바로 아래(ny-1)에 무언가 있어야 함
+                if (ny > 0) {
+                    // 바로 아래에 이미 놓인 블록이 있는가?
+                    const hasBoardSupport = tempBoard[nz*5 + nx].some(c => c.layer === ny - 1);
+                    
+                    // 또는, 바로 아래에 '지금 놓고 있는 블록'의 다른 부분이 있는가? (Self-support)
+                    const hasSelfSupport = offsets.some(other => other[0] === o[0] && other[2] === o[2] && other[1] === ny - 1);
+
+                    if (!hasBoardSupport && !hasSelfSupport) {
+                        return false; // 공중 부양 금지!
+                    }
                 }
             }
             return true;
         }
 
-        // --- 모바일 대응 로직 수정 (터치 시 선택 -> 버튼 클릭 시 확정) ---
         function handleCellClick(gx, gz) {
             if(state.winner || state.currentTurn !== state.myRole) return;
-            
-            // 기존 선택 초기화
             state.pendingMove = null;
             document.getElementById('confirm-btn').style.display = 'none';
 
             if(state.phase === 'place') {
                 if(canPlace(gx, gz, state.rotation, state.placeMode)) {
-                    // 유효하면 pending 상태로 저장하고 버튼 표시
                     state.pendingMove = { type: 'place', x: gx, z: gz, rot: state.rotation, mode: state.placeMode };
                     document.getElementById('confirm-btn').style.display = 'block';
                 }
             } else {
-                // 이동 단계
                 const stack = state.board[gz*5+gx];
                 const top = stack.length > 0 ? stack.sort((a,b)=>b.layer-a.layer)[0] : null;
-                
                 if(!state.selectedId) {
-                    // 내 돌 선택 시도
                     if(top && top.owner === state.myRole) {
                         state.selectedId = top.pieceId;
                         const p = state.pieces.find(pc => pc.id === state.selectedId);
                         state.rotation = p.rot; state.placeMode = p.mode; renderAll();
                     }
                 } else {
-                    // 선택된 돌을 이동시킬 위치 선택
                     if(canPlace(gx, gz, state.rotation, state.placeMode, state.selectedId)) {
                          state.pendingMove = { type: 'move', x: gx, z: gz, rot: state.rotation, mode: state.placeMode };
                          document.getElementById('confirm-btn').style.display = 'block';
@@ -305,10 +316,8 @@
             }
         }
 
-        // ** 확정 버튼 클릭 시 호출 **
         window.confirmMove = () => {
             if (!state.pendingMove) return;
-
             const pm = state.pendingMove;
             if (pm.type === 'place') {
                 addPieceData(Math.random().toString(36), state.myRole, pm.x, pm.z, pm.rot, pm.mode);
@@ -320,8 +329,6 @@
                 state.selectedId = null;
                 finishTurn();
             }
-            
-            // 초기화
             state.pendingMove = null;
             document.getElementById('confirm-btn').style.display = 'none';
         };
@@ -354,7 +361,6 @@
             }
         }
 
-        // --- SUPER HARD AI Logic (유지) ---
         function doAI() {
             if (state.winner || state.currentTurn !== 'p2') return;
             setTimeout(() => {
@@ -428,7 +434,6 @@
             return score;
         }
 
-        // --- UI Updates ---
         function updateUI() {
             document.getElementById('role-label').innerText = state.myRole==='p1'?"🔴 나 (선)":state.myRole==='p2'?"🔵 나 (후)":"관전";
             document.getElementById('turn-label').innerText = state.currentTurn===state.myRole?"내 턴":"상대 턴";
@@ -439,13 +444,10 @@
         function animate() {
             requestAnimationFrame(animate); controls.update(); ghostGroup.clear();
             
-            // 1. Pending 상태(확정 대기 중)인 경우 고스트 표시
             if(state.pendingMove) {
                 const pm = state.pendingMove;
                 getOffsets(pm.mode, pm.rot).forEach(o => ghostGroup.add(createCube(pm.x+o[0], o[1], pm.z+o[2], 0x4CAF50, false)));
-            } 
-            // 2. Pending이 없고 내 턴일 때 마우스 호버 표시 (PC용 경험 유지)
-            else if(!state.winner && state.currentTurn === state.myRole) {
+            } else if(!state.winner && state.currentTurn === state.myRole) {
                 raycaster.setFromCamera(mouse, camera);
                 const floor = raycaster.intersectObjects(scene.children).find(h => h.object.name === "floor");
                 if(floor) {
@@ -458,7 +460,6 @@
             renderer.render(scene, camera);
         }
 
-        // 버튼 조작 시 Pending 상태도 실시간 업데이트
         window.rotatePiece = () => { 
             state.rotation++; 
             if(state.pendingMove) { state.pendingMove.rot = state.rotation; }
