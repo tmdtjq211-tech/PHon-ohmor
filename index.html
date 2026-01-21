@@ -71,7 +71,8 @@
             "three": "https://unpkg.com/three@0.160.0/build/three.module.js", 
             "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
             "firebase/app": "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js",
-            "firebase/database": "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js"
+            "firebase/database": "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js",
+            "firebase/analytics": "https://www.gstatic.com/firebasejs/10.7.1/firebase-analytics.js"
         } }
     </script>
 </head>
@@ -127,18 +128,25 @@
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { initializeApp } from "firebase/app";
         import { getDatabase, ref, set, onValue, update, push, get, query, limitToLast, runTransaction } from "firebase/database";
+        import { getAnalytics } from "firebase/analytics";
 
+        // ==========================================
+        // 🔥 사용자가 제공한 Config (URL 포함됨!)
+        // ==========================================
         const firebaseConfig = {
-            apiKey: "AIzaSyDcKWKTei9L2Sat-XxinlXknabIcHgmjGs",
-            authDomain: "d454545-ac9b1.firebaseapp.com",
-            projectId: "d454545-ac9b1",
-            storageBucket: "d454545-ac9b1.firebasestorage.app",
-            messagingSenderId: "438189498590",
-            appId: "1:438189498590:web:5c515415a9aa1f2b5aa24f",
-            measurementId: "G-BC09V1ZZT7",
-            databaseURL: "https://d454545-ac9b1-default-rtdb.firebaseio.com"
+            apiKey: "AIzaSyB-wYr-_N-ZaPGJon_mj2OsNgG472b1gw8",
+            authDomain: "dddaaa-51437.firebaseapp.com",
+            databaseURL: "https://dddaaa-51437-default-rtdb.firebaseio.com", // ✅ 중요: 이 주소가 있어야 연결됨
+            projectId: "dddaaa-51437",
+            storageBucket: "dddaaa-51437.firebasestorage.app",
+            messagingSenderId: "372926322507",
+            appId: "1:372926322507:web:01c2064521dbd81897bace",
+            measurementId: "G-PCTWYEF35C"
         };
+
+        // Initialize Firebase
         const app = initializeApp(firebaseConfig);
+        const analytics = getAnalytics(app); // 애널리틱스 초기화 (사용자 요청)
         const db = getDatabase(app);
 
         const state = {
@@ -168,17 +176,16 @@
         };
 
         // ==========================================
-        // 🔥 실시간 자동 매칭 로직 (개선됨)
+        // 🔥 실시간 자동 매칭 로직
         // ==========================================
         async function findAndJoinMatch() {
-            // UI 업데이트
             document.getElementById('overlay-screen').classList.remove('hidden');
             document.getElementById('overlay-title').innerText = "매칭 중...";
             document.getElementById('loading-spinner').classList.remove('hidden');
             document.getElementById('match-status').innerText = "빈 방을 검색하고 있습니다...";
 
             const roomsRef = ref(db, 'rooms');
-            // 최근 50개의 방을 가져와서 빈 방이 있는지 확인 (간단한 매칭 풀)
+            // 최근 50개의 방을 가져와서 빈 방이 있는지 확인
             const snapshot = await get(query(roomsRef, limitToLast(50)));
             let joinedRoomId = null;
 
@@ -191,7 +198,7 @@
                     if (rooms[id].status === 'waiting') {
                         const targetRoomRef = ref(db, `rooms/${id}`);
                         
-                        // 트랜잭션을 사용하여 동시 접속 방지 (먼저 잡는 사람이 임자)
+                        // 트랜잭션을 사용하여 동시 접속 방지
                         const result = await runTransaction(targetRoomRef, (currentData) => {
                             if (currentData && currentData.status === 'waiting') {
                                 currentData.status = 'matching_complete'; // 상태 변경
@@ -311,7 +318,6 @@
             const hostWins = winMap[h] === g;
             
             // 승자가 선공(P1)을 가져감
-            // 내가 호스트인데 이겼으면 P1, 졌으면 P2
             state.myRole = (state.myRole === 'host' ? (hostWins?'p1':'p2') : (hostWins?'p2':'p1'));
             
             if (state.myRole === 'p1') { // 선공(P1)이 초기 상태 세팅 후 playing으로 전환
@@ -386,7 +392,7 @@
         }
 
         // ==========================================
-        // 🔥 검증 로직 (엄격한 물리 법칙) - 유지
+        // 🔥 검증 로직 (엄격한 물리 법칙)
         // ==========================================
         function validateMove(gx, gz, rot, mode, ignoreId = null) {
             const offsets = getOffsets(mode, rot);
